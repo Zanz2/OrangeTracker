@@ -11,12 +11,13 @@ import brickpi3
 
 BP = brickpi3.BrickPi3()
 camera = PiCamera()
-camera_w, camera_h = 1024,1024
+camera_w, camera_h = 512,512
 camera.resolution = (camera_w, camera_h)
 camera.framerate = 20
 rawCapture = PiRGBArray(camera, size=(camera_w, camera_h))
 hog = cv2.HOGDescriptor()
 hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+BP.reset_all()
 
 def get_camera_img():
     rawCapture = PiRGBArray(camera)
@@ -101,15 +102,18 @@ try:
     robot_mvmt_speed = 5
     detection_range_pixels = 20
     use_steps = True
-    last_move_v = ""
-    last_move_h = ""
+    last_move_v = "up"
+    last_move_h = "right"
+    do_idle = False
 
     # idle behaviour patterns
-    idle_up_right = ["r","r","r","r","r","r","r","r","r","u","u","u"]
-    idle_up_left = ["l","l","l","l","l","l","l","l","l","u","u","u"]
-    idle_down_right = ["r","r","r","r","r","r","r","r","r","d","d","d"]
-    idle_down_left = ["l","l","l","l","l","l","l","l","l","d","d","d"]
+    idle_up_right = ["r","r","r","r","r","r","r","r","r","u"]
+    idle_up_left = ["l","l","l","l","l","l","l","l","l","u"]
+    idle_down_right = ["r","r","r","r","r","r","r","r","r","d"]
+    idle_down_left = ["l","l","l","l","l","l","l","l","l","d"]
+    idle_array = []
     idle_counter = 0
+    stage_lvl = 0
 
     BP.set_motor_power(BP.PORT_A, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
@@ -132,7 +136,8 @@ try:
         #image, detections = detect_people(image) # detections is a list of xmin, ymin, xmax, ymax values
         image, detections = detect_color_obj(image)
         if len(detections) > 0:
-            idle_counter = 0
+            print("Detected")
+            idle_counter = -1
             center_detection = detections[0]
             boxXCenter = (center_detection[0] + center_detection[2]) / 2
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
@@ -160,13 +165,32 @@ try:
                     vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else vertical_robot_speed(robot_mvmt_speed,delay=robot_mvmt_delay)
             #cv2.imshow("Image", image)
             #cv2.waitKey(0)
-        else: # idle behaviour
-            if idle_counter == 0: time.sleep(0.5)
-            idle_array = []
+        elif do_idle: # idle behaviour
+            if idle_counter == -1:
+                idle_counter += 1
+                time.sleep(0.5)
+
             if last_move_h == "right" and last_move_v == "up": idle_array = idle_up_right
             if last_move_h == "right" and last_move_v == "down": idle_array = idle_down_right
             if last_move_h == "left" and last_move_v == "up": idle_array = idle_up_left
             if last_move_h == "left" and last_move_v == "down": idle_array = idle_down_left
+            
+            if idle_counter >= len(idle_array):
+                idle_counter = 0
+                print(stage_lvl)
+                if stage_lvl == 3:
+                    stage_lvl = -1
+                    if last_move_v == "down": last_move_v = "up"
+                    if last_move_v == "up": last_move_v = "down"
+                    
+                if last_move_h == "right":
+                    if last_move_v == "up": idle_array = idle_up_left
+                    if last_move_v == "down": idle_array = idle_down_left
+                if last_move_h == "left":
+                    if last_move_v == "up": idle_array = idle_up_right
+                    if last_move_v == "down": idle_array = idle_down_right
+                stage_lvl += 1
+            
             current_action = idle_array[idle_counter]
             if current_action == "r": horizontal_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
             if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
