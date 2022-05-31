@@ -91,9 +91,11 @@ try:
     power_limit = 0
     degrees_per_sec = 0
     camera_delay = 0.05
-    robot_mvmt_delay = 0
+    robot_mvmt_delay = 0.02 # delay for 0.02 seconds (20ms) to reduce the Raspberry Pi CPU load.
     robot_mvmt_step = 5
     robot_mvmt_speed = 5
+    detection_range_pixels = 20
+    use_steps = True
 
     BP.set_motor_power(BP.PORT_A, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
@@ -122,25 +124,42 @@ try:
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
             imageYCenter = image.shape[0]/2
             imageXCenter = image.shape[1]/2
-            if boxXCenter > imageXCenter:
-                horizontal_robot_view(robot_mvmt_step)
-                #horizontal_robot_speed(robot_mvmt_speed)
-            else:
-                horizontal_robot_view(-robot_mvmt_step)
-                #horizontal_robot_speed(-robot_mvmt_speed)
-
-            if boxYCenter > imageYCenter:
-                vertical_robot_view(-robot_mvmt_step)
-                #vertical_robot_speed(-robot_mvmt_speed)
-            else:
-                vertical_robot_view(robot_mvmt_step)
-                #vertical_robot_speed(robot_mvmt_speed)
-            time.sleep(robot_mvmt_delay)
+            if abs(boxXCenter - imageXCenter) > detection_range_pixels:
+                if boxXCenter > imageXCenter:
+                    #print("Move right")
+                    if use_steps:
+                        horizontal_robot_view(robot_mvmt_step)
+                    else:
+                        horizontal_robot_speed(robot_mvmt_speed)
+                    time.sleep(robot_mvmt_delay)
+                else:
+                    #print("Move left")
+                    if use_steps:
+                        horizontal_robot_view(-robot_mvmt_step)
+                    else:
+                        horizontal_robot_speed(-robot_mvmt_speed)
+                    time.sleep(robot_mvmt_delay)
+            if abs(boxYCenter - imageYCenter) > detection_range_pixels:
+                if boxYCenter > imageYCenter:
+                    #print("Move down")
+                    if use_steps:
+                        vertical_robot_view(-robot_mvmt_step)
+                    else:
+                        vertical_robot_speed(-robot_mvmt_speed)
+                    time.sleep(robot_mvmt_delay)
+                else:
+                    #print("Move Up")
+                    if use_steps:
+                        vertical_robot_view(robot_mvmt_step)
+                    else:
+                        vertical_robot_speed(robot_mvmt_speed)
+                    time.sleep(robot_mvmt_delay)
             #cv2.imshow("Image", image)
             #cv2.waitKey(0)
-        else:
+        elif not use_steps:
             vertical_robot_speed(0)
             horizontal_robot_speed(0)
+            time.sleep(robot_mvmt_delay)
         # clear the stream in preparation for the next frame
         rawCapture.truncate(0)
 
