@@ -57,9 +57,10 @@ def detect_people(image): #returns resized image and rect with detections
 def detect_color_obj(image):
     frame = image.copy()
  
-    u_color = np.array([104, 95, 255])# bgr
-    l_color = np.array([55, 67, 200]) #bgr
+    l_color = np.array([0, 118, 115])# bgr(10, 100, 20), (25, 255, 255)
+    u_color = np.array([10, 255, 255]) #bgr
  
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(frame, l_color, u_color)
     res = cv2.bitwise_and(frame, frame, mask = mask)
  
@@ -99,6 +100,7 @@ def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy,
     global last_move_h
     while True:
         idle_counter = q.get()  # blocks until the item is available
+        if idle_counter == 0: print("Lost")
         if idle_counter == -1:
             q.task_done()
             time.sleep(idle_delay)
