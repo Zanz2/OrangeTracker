@@ -3,8 +3,9 @@ from picamera.array import PiRGBArray
 from picamera import PiCamera
 from imutils.object_detection import non_max_suppression
 from imutils import paths
+from queue import Queue
 
-import curses, time, sys
+import curses, time, sys, threading
 import cv2, imutils
 import numpy as np
 import brickpi3
@@ -86,6 +87,46 @@ def detect_color_obj(image):
         return frame, picks
     return frame, []
 
+def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy, i know this is bad
+    print("Start thread idle func")
+    # idle behaviour patterns (make the vars global)
+    global idle_up_right
+    global idle_down_left
+    global idle_array
+    global robot_mvmt_step
+    global robot_mvmt_delay
+    global idle_delay
+    global last_move_h
+    while True:
+        idle_counter = q.get()  # blocks until the item is available
+        if idle_counter == -1:
+            q.task_done()
+            time.sleep(idle_delay)
+            with q.mutex:
+                q.queue.clear()
+            if last_move_h == "right":
+                idle_array = idle_up_right
+            else:
+                idle_array = idle_down_left
+
+        if idle_counter == len(idle_array):
+            print("Lost")
+            idle_counter = 0
+            if idle_array == idle_up_right:
+                idle_array = idle_down_left
+            else:
+                idle_array = idle_up_right
+        current_action = idle_array[idle_counter]
+        if current_action == "r": horizontal_robot_view(robot_mvmt_step, delay=robot_mvmt_delay)
+        if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
+        if current_action == "u": vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
+        if current_action == "d": vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay)
+        #time.sleep(robot_mvmt_delay)
+        idle_counter += 1
+        q.put(idle_counter)
+        q.task_done()
+        
+    
 try:
     # BP.PORT_A angle r
     # BP.PORT_B angle l
@@ -95,25 +136,26 @@ try:
     BP.offset_motor_encoder(BP.PORT_C, BP.get_motor_encoder(BP.PORT_C))
 
     power_limit = 0
-    degrees_per_sec = 0
+    degrees_per_sec = 30 # the higher the limit the more camera shake
     camera_delay = 0.05
     robot_mvmt_delay = 0.02 # delay for 0.02 seconds (20ms) to reduce the Raspberry Pi CPU load.
-    robot_mvmt_step = 5
+    idle_delay = 5
+    robot_mvmt_step = 8
     robot_mvmt_speed = 5
     detection_range_pixels = 20
     use_steps = True
-    last_move_v = "up"
-    last_move_h = "right"
-    do_idle = False
+    do_idle = True
 
     # idle behaviour patterns
-    idle_up_right = ["r","r","r","r","r","r","r","r","r","u"]
-    idle_up_left = ["l","l","l","l","l","l","l","l","l","u"]
-    idle_down_right = ["r","r","r","r","r","r","r","r","r","d"]
-    idle_down_left = ["l","l","l","l","l","l","l","l","l","d"]
-    idle_array = []
-    idle_counter = 0
-    stage_lvl = 0
+    idle_up_right = 200*["r"]+20*["u"]
+    idle_down_left = 200*["l"]+20*["d"]
+    last_move_v = "up"
+    last_move_h = "right"
+    idle_array = idle_up_right
+    lock = threading.Lock()
+    q = Queue()
+    idle_search_timer = threading.Timer(idle_delay, idle_search_func, args=(lock,q))
+    #idle_search_timer.daemon = True
 
     BP.set_motor_power(BP.PORT_A, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
@@ -124,6 +166,9 @@ try:
     BP.set_motor_power(BP.PORT_C, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_C, power_limit, degrees_per_sec)
 
+    if do_idle:
+        idle_search_timer.start()
+        q.put(0)
     for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
         #image = get_camera_img() # too slow
         
@@ -137,7 +182,8 @@ try:
         image, detections = detect_color_obj(image)
         if len(detections) > 0:
             print("Detected")
-            idle_counter = -1
+            #idle_search_timer.start()  # this cant be restarted, fix needed
+            q.put(-1) # add detected flag to queue
             center_detection = detections[0]
             boxXCenter = (center_detection[0] + center_detection[2]) / 2
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
@@ -165,40 +211,7 @@ try:
                     vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else vertical_robot_speed(robot_mvmt_speed,delay=robot_mvmt_delay)
             #cv2.imshow("Image", image)
             #cv2.waitKey(0)
-        elif do_idle: # idle behaviour
-            if idle_counter == -1:
-                idle_counter += 1
-                time.sleep(0.5)
-
-            if last_move_h == "right" and last_move_v == "up": idle_array = idle_up_right
-            if last_move_h == "right" and last_move_v == "down": idle_array = idle_down_right
-            if last_move_h == "left" and last_move_v == "up": idle_array = idle_up_left
-            if last_move_h == "left" and last_move_v == "down": idle_array = idle_down_left
-            
-            if idle_counter >= len(idle_array):
-                idle_counter = 0
-                print(stage_lvl)
-                if stage_lvl == 3:
-                    stage_lvl = -1
-                    if last_move_v == "down": last_move_v = "up"
-                    if last_move_v == "up": last_move_v = "down"
-                    
-                if last_move_h == "right":
-                    if last_move_v == "up": idle_array = idle_up_left
-                    if last_move_v == "down": idle_array = idle_down_left
-                if last_move_h == "left":
-                    if last_move_v == "up": idle_array = idle_up_right
-                    if last_move_v == "down": idle_array = idle_down_right
-                stage_lvl += 1
-            
-            current_action = idle_array[idle_counter]
-            if current_action == "r": horizontal_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
-            if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
-            if current_action == "u": vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
-            if current_action == "d": vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay)
-            idle_counter += 1
-
-
+        
         # clear the stream in preparation for the next frame
         rawCapture.truncate(0)
 
