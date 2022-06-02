@@ -5,7 +5,7 @@ from imutils.object_detection import non_max_suppression
 from imutils import paths
 from queue import Queue
 
-import curses, time, sys, threading
+import curses, time, sys, threading, random
 import cv2, imutils
 import numpy as np
 import brickpi3
@@ -20,14 +20,18 @@ hog = cv2.HOGDescriptor()
 hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
 BP.reset_all()
 
-def get_camera_img():
+
+def get_camera_img(delay=0.05):
     rawCapture = PiRGBArray(camera)
     # allow the camera to warmup
-    time.sleep(camera_delay)
+    time.sleep(delay)
     camera.capture(rawCapture, format="bgr")
     image = rawCapture.array
     image = cv2.flip(image, -1)
     return image
+
+#image = get_camera_img() # make images for tresholding color with colorpicker
+#cv2.imwrite('outputs/image1.png', image)
 
 def vertical_robot_view(value_to_increment,delay=0.02): # positive is up, negative is down
     BP.set_motor_position_relative(BP.PORT_A+BP.PORT_B, value_to_increment)
@@ -57,14 +61,21 @@ def detect_people(image): #returns resized image and rect with detections
 def detect_color_obj(image):
     frame = image.copy()
  
-    l_color = np.array([0, 118, 115])# bgr(10, 100, 20), (25, 255, 255)
-    u_color = np.array([10, 255, 255]) #bgr
+    l_color = np.array([0, 0, 0])
+    u_color = np.array([180, 255, 255])
+    
+    l_color = np.array([0, 145, 160])
+    u_color = np.array([180, 230, 255])
+    
  
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(frame, l_color, u_color)
     res = cv2.bitwise_and(frame, frame, mask = mask)
  
     contours, hierarchy = cv2.findContours(mask,cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    #cv2.CHAIN_APPROX_SIMPLE
+    #cv2.CHAIN_APPROX_TC89_KCOS 
+    #cv2.CHAIN_APPROX_TC89_L1 
     coordinates_list = []
     area_list = []
     mx_area = 0
@@ -78,13 +89,19 @@ def detect_color_obj(image):
     area_list = [x / mx_area for x in area_list]
     coordinates_list = np.array(coordinates_list)
     area_list = np.array(area_list)
-    if mx_area > 80:
+    if mx_area > 300:
         picks = non_max_suppression(coordinates_list, probs=area_list, overlapThresh=0.5)
         x,y,xmax,ymax = picks[0][0],picks[0][1],picks[0][2],picks[0][3]
-        #frame = cv2.rectangle(frame, (x, y), (xmax, ymax), (255,0,0), 2)
-        #frame = cv2.drawContours(frame, contours, -1, (0,255,0), 3)
-        #cv2.imshow("video", frame)
-        #cv2.waitKey(0)
+        
+        frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
+        if False:
+            #cv2.imwrite('outputs/image{}.png'.format(random.randint(0,1000)), image) # for finding tresholds
+            frame = cv2.rectangle(frame, (x, y), (xmax, ymax), (255,0,0), 2)
+            frame = cv2.drawContours(frame, contours, -1, (0,255,0), 3)
+            
+            cv2.imshow("video", frame)
+            cv2.waitKey(1000)
+            cv2.destroyAllWindows()
         return frame, picks
     return frame, []
 
@@ -138,14 +155,12 @@ try:
     BP.offset_motor_encoder(BP.PORT_C, BP.get_motor_encoder(BP.PORT_C))
 
     power_limit = 0
-    degrees_per_sec = 30 # the higher the limit the more camera shake
+    degrees_per_sec = 50 # 30 the higher the limit the more camera shake
     camera_delay = 0.05
     robot_mvmt_delay = 0.02 # delay for 0.02 seconds (20ms) to reduce the Raspberry Pi CPU load.
     idle_delay = 5
-    robot_mvmt_step = 8
-    robot_mvmt_speed = 5
-    detection_range_pixels = 20
-    use_steps = True
+    robot_mvmt_step = 8 # 8
+    detection_box = 0.3
     do_idle = True
 
     # idle behaviour patterns
@@ -172,7 +187,7 @@ try:
         idle_search_timer.start()
         q.put(0)
     for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-        #image = get_camera_img() # too slow
+        #image = get_camera_img(camera_delay) # too slow
         
         # grab the raw NumPy array representing the image, then initialize the timestamp
         # and occupied/unoccupied text
@@ -191,32 +206,32 @@ try:
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
             imageYCenter = image.shape[0]/2
             imageXCenter = image.shape[1]/2
-
-            if abs(boxXCenter - imageXCenter) > detection_range_pixels:
+            
+            xdiff = (boxXCenter/camera_w - imageXCenter/camera_w) * 6 # -3 to 3 values for how "off" it is
+            ydiff = (boxYCenter/camera_h - imageYCenter/camera_h) * 6 # -3 to 3 values for how "off" it is
+            ydiff = -ydiff 
+            
+            xstep = robot_mvmt_step*xdiff
+            ystep = robot_mvmt_step*ydiff
+            print(xstep)
+            print(ystep)
+            if abs(xdiff) > detection_box:
                 if boxXCenter > imageXCenter:
-                    #print("Move right")
                     last_move_h = "right"
-                    horizontal_robot_view(robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else horizontal_robot_speed(robot_mvmt_speed,delay=robot_mvmt_delay)
+                    horizontal_robot_view(xstep,delay=robot_mvmt_delay) 
                 else:
-                    #print("Move left")
                     last_move_h = "left"
-                    horizontal_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else horizontal_robot_speed(-robot_mvmt_speed,delay=robot_mvmt_delay)
+                    horizontal_robot_view(xstep,delay=robot_mvmt_delay)
 
-            if abs(boxYCenter - imageYCenter) > detection_range_pixels:
+            if abs(ydiff) > detection_box:
                 if boxYCenter > imageYCenter:
-                    #print("Move down")
                     last_move_v = "down"
-                    vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else vertical_robot_speed(-robot_mvmt_speed,delay=robot_mvmt_delay)
+                    vertical_robot_view(ystep,delay=robot_mvmt_delay)
                 else:
-                    #print("Move Up")
                     last_move_v = "up"
-                    vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay) if use_steps else vertical_robot_speed(robot_mvmt_speed,delay=robot_mvmt_delay)
-            #cv2.imshow("Image", image)
-            #cv2.waitKey(0)
-        
+                    vertical_robot_view(ystep,delay=robot_mvmt_delay)
         # clear the stream in preparation for the next frame
         rawCapture.truncate(0)
-
 
 except KeyboardInterrupt: # except the program gets interrupted by Ctrl+C on the keyboard.
     BP.reset_all()
