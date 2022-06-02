@@ -213,6 +213,7 @@ try:
             
             xstep = robot_mvmt_step*xdiff
             ystep = robot_mvmt_step*ydiff
+
             print(xstep)
             print(ystep)
             if abs(xdiff) > detection_box:
