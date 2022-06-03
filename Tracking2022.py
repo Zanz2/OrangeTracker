@@ -5,20 +5,25 @@ from imutils.object_detection import non_max_suppression
 from imutils import paths
 from queue import Queue
 
-import curses, time, sys, threading, random
+import curses, time, sys, threading, random,statistics
 import cv2, imutils
 import numpy as np
 import brickpi3
 
 BP = brickpi3.BrickPi3()
 camera = PiCamera()
-camera_w, camera_h = 512,512
+camera_w, camera_h = 256,256 # lower res, faster image acquisition
 camera.resolution = (camera_w, camera_h)
-camera.framerate = 20
+camera.framerate = camera.MAX_FRAMERATE
+camera.hflip = camera.vflip = True
 rawCapture = PiRGBArray(camera, size=(camera_w, camera_h))
 hog = cv2.HOGDescriptor()
 hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+print("motors off (ctrl c now to set them manually by hand)")
+BP.set_motor_power(BP.PORT_A+BP.PORT_B+BP.PORT_C, BP.MOTOR_FLOAT)
 BP.reset_all()
+time.sleep(3)
+print("motors on")
 
 
 def get_camera_img(delay=0.05):
@@ -58,7 +63,7 @@ def detect_people(image): #returns resized image and rect with detections
     if len(weights) > 0 and max(weights) < 0.6: pick = []
     return image, pick
 
-def detect_color_obj(image):
+def detect_color_obj(image,visualize=False):
     frame = image.copy()
  
     l_color = np.array([0, 0, 0])
@@ -94,7 +99,7 @@ def detect_color_obj(image):
         x,y,xmax,ymax = picks[0][0],picks[0][1],picks[0][2],picks[0][3]
         
         frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
-        if False:
+        if visualize:
             #cv2.imwrite('outputs/image{}.png'.format(random.randint(0,1000)), image) # for finding tresholds
             frame = cv2.rectangle(frame, (x, y), (xmax, ymax), (255,0,0), 2)
             frame = cv2.drawContours(frame, contours, -1, (0,255,0), 3)
@@ -154,14 +159,16 @@ try:
     BP.offset_motor_encoder(BP.PORT_B, BP.get_motor_encoder(BP.PORT_B))
     BP.offset_motor_encoder(BP.PORT_C, BP.get_motor_encoder(BP.PORT_C))
 
-    power_limit = 0
-    degrees_per_sec = 50 # 30 the higher the limit the more camera shake
+    power_limit = 0 # plug in the batteries if both power and dps is unlimited
+    degrees_per_sec = 0 # 30 the higher the limit the more camera shake with big movements
     camera_delay = 0.05
     robot_mvmt_delay = 0.02 # delay for 0.02 seconds (20ms) to reduce the Raspberry Pi CPU load.
     idle_delay = 5
-    robot_mvmt_step = 8 # 8
-    detection_box = 0.3
-    do_idle = True
+    robot_mvmt_step = 4 
+    detection_box = 0.1
+    do_idle = False # if visualizing turn this off
+    visualize_detection = False
+    show_performance_metric = True
 
     # idle behaviour patterns
     idle_up_right = 200*["r"]+20*["u"]
@@ -173,32 +180,30 @@ try:
     q = Queue()
     idle_search_timer = threading.Timer(idle_delay, idle_search_func, args=(lock,q))
     #idle_search_timer.daemon = True
-
-    BP.set_motor_power(BP.PORT_A, BP.MOTOR_FLOAT)
+    
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
-
-    BP.set_motor_power(BP.PORT_B, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_B, power_limit, degrees_per_sec)
-
-    BP.set_motor_power(BP.PORT_C, BP.MOTOR_FLOAT)
     BP.set_motor_limits(BP.PORT_C, power_limit, degrees_per_sec)
 
     if do_idle:
         idle_search_timer.start()
         q.put(0)
+        
+    if show_performance_metric:
+        perf_time_list = []
+        tic = time.clock()
     for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
         #image = get_camera_img(camera_delay) # too slow
         
         # grab the raw NumPy array representing the image, then initialize the timestamp
         # and occupied/unoccupied text
         image = frame.array
-        image = cv2.flip(image, -1)
         # show the frame
         
         #image, detections = detect_people(image) # detections is a list of xmin, ymin, xmax, ymax values
-        image, detections = detect_color_obj(image)
+        image, detections = detect_color_obj(image,visualize_detection)
         if len(detections) > 0:
-            print("Detected")
+            #print("Detected")
             #idle_search_timer.start()  # this cant be restarted, fix needed
             q.put(-1) # add detected flag to queue
             center_detection = detections[0]
@@ -207,15 +212,14 @@ try:
             imageYCenter = image.shape[0]/2
             imageXCenter = image.shape[1]/2
             
-            xdiff = (boxXCenter/camera_w - imageXCenter/camera_w) * 6 # -3 to 3 values for how "off" it is
-            ydiff = (boxYCenter/camera_h - imageYCenter/camera_h) * 6 # -3 to 3 values for how "off" it is
+            xdiff = (boxXCenter/camera_w - imageXCenter/camera_w)*2 # (-1 to 1) values for how "off" it is
+            ydiff = (boxYCenter/camera_h - imageYCenter/camera_h)*2 # (-1 to 1) values for how "off" it is
             ydiff = -ydiff 
             
-            xstep = robot_mvmt_step*xdiff
-            ystep = robot_mvmt_step*ydiff
-
-            print(xstep)
-            print(ystep)
+            xstep = robot_mvmt_step*xdiff*5
+            ystep = robot_mvmt_step*ydiff*5
+            #print(xstep)
+            #print(ystep)
             if abs(xdiff) > detection_box:
                 if boxXCenter > imageXCenter:
                     last_move_h = "right"
@@ -233,9 +237,18 @@ try:
                     vertical_robot_view(ystep,delay=robot_mvmt_delay)
         # clear the stream in preparation for the next frame
         rawCapture.truncate(0)
+        if show_performance_metric:
+            toc = time.clock()
+            perf_time_list.append(toc-tic)
+            if len(perf_time_list) == 100:
+                print(statistics.mean(perf_time_list))
+                perf_time_list = []
+            tic = time.clock()
 
 except KeyboardInterrupt: # except the program gets interrupted by Ctrl+C on the keyboard.
+    BP.set_motor_power(BP.PORT_A+BP.PORT_B+BP.PORT_C, BP.MOTOR_FLOAT)
     BP.reset_all()
+BP.set_motor_power(BP.PORT_A+BP.PORT_B+BP.PORT_C, BP.MOTOR_FLOAT)
 BP.reset_all()
 sys.exit(0)
 
