@@ -5,7 +5,7 @@ from imutils.object_detection import non_max_suppression
 from imutils import paths
 from queue import Queue
 
-import curses, time, sys, threading, random,statistics
+import curses, time, sys, threading, random, statistics
 import cv2, imutils
 import numpy as np
 import brickpi3
@@ -57,13 +57,13 @@ def horizontal_robot_speed(speed,delay=0.02):
 def detect_people(image): #returns resized image and rect with detections 
     image = imutils.resize(image, width=min(camera_h, image.shape[1]))
     (rects, weights) = hog.detectMultiScale(image, winStride=(4, 4),padding=(8, 8), scale=1.05)
-    print("weights: {}".format(weights))
+    #print("weights: {}".format(weights))
     rects = np.array([[x, y, x + w, y + h] for (x, y, w, h) in rects])
     pick = non_max_suppression(rects, probs=weights, overlapThresh=0.6)
     if len(weights) > 0 and max(weights) < 0.6: pick = []
     return image, pick
 
-def detect_color_obj(image,visualize=False):
+def detect_color_obj(image,max_area_tresh):
     frame = image.copy()
  
     l_color = np.array([0, 0, 0])
@@ -71,7 +71,6 @@ def detect_color_obj(image,visualize=False):
     
     l_color = np.array([0, 145, 160])
     u_color = np.array([180, 230, 255])
-    
  
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(frame, l_color, u_color)
@@ -94,21 +93,11 @@ def detect_color_obj(image,visualize=False):
     area_list = [x / mx_area for x in area_list]
     coordinates_list = np.array(coordinates_list)
     area_list = np.array(area_list)
-    if mx_area > 300:
+    frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
+    if mx_area > max_area_tresh:
         picks = non_max_suppression(coordinates_list, probs=area_list, overlapThresh=0.5)
-        x,y,xmax,ymax = picks[0][0],picks[0][1],picks[0][2],picks[0][3]
-        
-        frame = cv2.cvtColor(frame, cv2.COLOR_HSV2BGR)
-        if visualize:
-            #cv2.imwrite('outputs/image{}.png'.format(random.randint(0,1000)), image) # for finding tresholds
-            frame = cv2.rectangle(frame, (x, y), (xmax, ymax), (255,0,0), 2)
-            frame = cv2.drawContours(frame, contours, -1, (0,255,0), 3)
-            
-            cv2.imshow("video", frame)
-            cv2.waitKey(1000)
-            cv2.destroyAllWindows()
-        return frame, picks
-    return frame, []
+        return frame, picks, contours, mx_area
+    return frame, [], [], 0
 
 def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy, i know this is bad
     print("Start thread idle func")
@@ -124,7 +113,6 @@ def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy,
         idle_counter = q.get()  # blocks until the item is available
         if idle_counter == 0: print("Lost")
         if idle_counter == -1:
-            q.task_done()
             time.sleep(idle_delay)
             with q.mutex:
                 q.queue.clear()
@@ -148,9 +136,23 @@ def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy,
         #time.sleep(robot_mvmt_delay)
         idle_counter += 1
         q.put(idle_counter)
-        q.task_done()
-        
     
+def video_stream_thread(frame_que):
+    #cv2.imwrite('outputs/image{}.png'.format(random.randint(0,1000)), image) # for finding tresholds
+    cv2.namedWindow('video', cv2.WINDOW_NORMAL) # higher res lower fps when resided
+    while True:
+        frame, detections, contours, area = frame_que.get()
+        if len(detections) != 0:
+            x,y,xmax,ymax = detections[0][0],detections[0][1],detections[0][2],detections[0][3]
+            frame = cv2.rectangle(frame, (x, y), (xmax, ymax), (255,0,0), 2)
+            frame = cv2.drawContours(frame, contours, -1, (0,255,0), 3)
+            frame = cv2.putText(frame, "box area:", (x,y-30), cv2.FONT_HERSHEY_SIMPLEX,0.7, (255,255,255), 1, cv2.LINE_AA)
+            frame = cv2.putText(frame, "{}".format(area), (x,y-10), cv2.FONT_HERSHEY_SIMPLEX,0.7, (255,255,255), 1, cv2.LINE_AA)
+        cv2.imshow("video", frame)
+        cv2.waitKey(1)
+        with frame_que.mutex:
+            frame_que.queue.clear()
+        
 try:
     # BP.PORT_A angle r
     # BP.PORT_B angle l
@@ -166,8 +168,9 @@ try:
     idle_delay = 5
     robot_mvmt_step = 4 
     detection_box = 0.1
+    max_area_treshold = 300
     do_idle = False # if visualizing turn this off
-    visualize_detection = False
+    visualize_detection = True
     show_performance_metric = True
 
     # idle behaviour patterns
@@ -178,7 +181,9 @@ try:
     idle_array = idle_up_right
     lock = threading.Lock()
     q = Queue()
+    stream_q = Queue()
     idle_search_timer = threading.Timer(idle_delay, idle_search_func, args=(lock,q))
+    stream_thread = threading.Thread(target=video_stream_thread, args=(stream_q,))
     #idle_search_timer.daemon = True
     
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
@@ -188,24 +193,24 @@ try:
     if do_idle:
         idle_search_timer.start()
         q.put(0)
-        
+    if visualize_detection:
+        stream_thread.start()
     if show_performance_metric:
         perf_time_list = []
         tic = time.clock()
-    for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
-        #image = get_camera_img(camera_delay) # too slow
         
+    for frame in camera.capture_continuous(rawCapture, format="bgr", use_video_port=True):
         # grab the raw NumPy array representing the image, then initialize the timestamp
         # and occupied/unoccupied text
         image = frame.array
-        # show the frame
-        
-        #image, detections = detect_people(image) # detections is a list of xmin, ymin, xmax, ymax values
-        image, detections = detect_color_obj(image,visualize_detection)
+        # detections is a list of xmin, ymin, xmax, ymax values
+        image, detections, contours, area = detect_color_obj(image,max_area_treshold)
+        if visualize_detection: stream_q.put((image,detections,contours,area))
+            
         if len(detections) > 0:
             #print("Detected")
-            #idle_search_timer.start()  # this cant be restarted, fix needed
-            q.put(-1) # add detected flag to queue
+
+            if do_idle: q.put(-1) # add detected flag to queue
             center_detection = detections[0]
             boxXCenter = (center_detection[0] + center_detection[2]) / 2
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
@@ -241,7 +246,7 @@ try:
             toc = time.clock()
             perf_time_list.append(toc-tic)
             if len(perf_time_list) == 100:
-                print(statistics.mean(perf_time_list))
+                print("Average execution time of 1 frame loop (ms): {}".format(statistics.mean(perf_time_list)))
                 perf_time_list = []
             tic = time.clock()
 
