@@ -7,5 +7,5 @@ Written in python utilizing multithreading for modes of operation and opencv.
 https://user-images.githubusercontent.com/10207480/172057896-bd40cd73-305a-46ad-9c62-7e55e79cf107.mp4
 
 
-(PS: i have a cactus collection and grow my own mint for mint tea)
+(PS: you can also see my cactus collection and how i grow my own mint for mint tea)
 
