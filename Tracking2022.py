@@ -114,8 +114,7 @@ def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy,
         if idle_counter == 0: print("Lost")
         if idle_counter == -1:
             time.sleep(idle_delay)
-            with q.mutex:
-                q.queue.clear()
+            q.queue.clear()
             if last_move_h == "right":
                 idle_array = idle_up_right
             else:
@@ -150,8 +149,7 @@ def video_stream_thread(frame_que):
             frame = cv2.putText(frame, "{}".format(area), (x,y-10), cv2.FONT_HERSHEY_SIMPLEX,0.7, (255,255,255), 1, cv2.LINE_AA)
         cv2.imshow("video", frame)
         cv2.waitKey(1)
-        with frame_que.mutex:
-            frame_que.queue.clear()
+        frame_que.queue.clear()
         
 try:
     # BP.PORT_A angle r
@@ -169,7 +167,7 @@ try:
     robot_mvmt_step = 4 
     detection_box = 0.1
     max_area_treshold = 300
-    do_idle = False # if visualizing turn this off
+    do_idle = True # if visualizing turn this off
     visualize_detection = True
     show_performance_metric = True
 
