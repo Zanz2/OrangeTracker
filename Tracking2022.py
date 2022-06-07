@@ -112,27 +112,26 @@ def idle_search_func(idl_q): # i dont want to pass all the arguments, too lazy, 
 
     while True:
         idle_counter = idl_q.get()  # blocks until the item is available
-        if idle_counter == 0: print("Lost")
+        idl_q.queue.clear()
         if idle_counter == -1:
             time.sleep(idle_delay)
-            idl_q.queue.clear()
             if last_move_h == "right":
                 idle_array = idle_up_right
             else:
                 idle_array = idle_down_left
-
-        if idle_counter == len(idle_array):
-            print("Lost")
-            idle_counter = 0
-            if idle_array == idle_up_right:
-                idle_array = idle_down_left
-            else:
-                idle_array = idle_up_right
-        current_action = idle_array[idle_counter]
-        if current_action == "r": horizontal_robot_view(robot_mvmt_step, delay=robot_mvmt_delay)
-        if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
-        if current_action == "u": vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
-        if current_action == "d": vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay)
+        else:
+            if idle_counter == 0: print("Lost")
+            if idle_counter == len(idle_array):
+                idle_counter = 0
+                if idle_array == idle_up_right:
+                    idle_array = idle_down_left
+                else:
+                    idle_array = idle_up_right
+            current_action = idle_array[idle_counter]
+            if current_action == "r": horizontal_robot_view(robot_mvmt_step, delay=robot_mvmt_delay)
+            if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
+            if current_action == "u": vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
+            if current_action == "d": vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay)
         idle_counter += 1
         idl_q.put(idle_counter)
     
@@ -172,7 +171,7 @@ try:
 
     idle_q = Queue()
     stream_q = Queue()
-    idle_search_timer = threading.Timer(idle_thread_delay, target=idle_search_func, args=(idle_q,))
+    idle_search_timer = threading.Timer(idle_thread_delay,idle_search_func, args=(idle_q,))
     stream_thread = threading.Thread(target=video_stream_thread, args=(stream_q,))
     idle_search_timer.daemon = True
     stream_thread.daemon = True
@@ -197,7 +196,9 @@ try:
         # detections is a list of xmin, ymin, xmax, ymax values
         image, detections, contours, area = detect_color_obj(image,max_area_treshold)
         if visualize_detection: stream_q.put((image,detections,contours,area))
-            
+        
+        #print(idle_q.qsize())
+        #print(stream_q.qsize())
         if len(detections) > 0:
             if do_idle: idle_q.put(-1) # add detected flag to queue
             center_detection = detections[0]
