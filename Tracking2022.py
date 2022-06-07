@@ -25,7 +25,6 @@ BP.reset_all()
 time.sleep(3)
 print("motors on")
 
-
 def get_camera_img(delay=0.05):
     rawCapture = PiRGBArray(camera)
     # allow the camera to warmup
@@ -99,22 +98,24 @@ def detect_color_obj(image,max_area_tresh):
         return frame, picks, contours, mx_area
     return frame, [], [], 0
 
-def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy, i know this is bad
+def idle_search_func(idl_q): # i dont want to pass all the arguments, too lazy, i know this is bad
     print("Start thread idle func")
-    # idle behaviour patterns (make the vars global)
-    global idle_up_right
-    global idle_down_left
-    global idle_array
     global robot_mvmt_step
     global robot_mvmt_delay
-    global idle_delay
     global last_move_h
+    # idle behaviour patterns (make the vars global)
+    idle_up_right = 200 * ["r"] + 20 * ["u"]
+    idle_down_left = 200 * ["l"] + 20 * ["d"]
+    #last_move_v = "up"
+    idle_array = idle_up_right
+    idle_delay = 5
+
     while True:
-        idle_counter = q.get()  # blocks until the item is available
+        idle_counter = idl_q.get()  # blocks until the item is available
         if idle_counter == 0: print("Lost")
         if idle_counter == -1:
             time.sleep(idle_delay)
-            q.queue.clear()
+            idl_q.queue.clear()
             if last_move_h == "right":
                 idle_array = idle_up_right
             else:
@@ -132,12 +133,10 @@ def idle_search_func(lock,q): # i dont want to pass all the arguments, too lazy,
         if current_action == "l": horizontal_robot_view(-robot_mvmt_step, delay=robot_mvmt_delay)
         if current_action == "u": vertical_robot_view(robot_mvmt_step,delay=robot_mvmt_delay)
         if current_action == "d": vertical_robot_view(-robot_mvmt_step,delay=robot_mvmt_delay)
-        #time.sleep(robot_mvmt_delay)
         idle_counter += 1
-        q.put(idle_counter)
+        idl_q.put(idle_counter)
     
 def video_stream_thread(frame_que):
-    #cv2.imwrite('outputs/image{}.png'.format(random.randint(0,1000)), image) # for finding tresholds
     cv2.namedWindow('video', cv2.WINDOW_NORMAL) # higher res lower fps when resided
     while True:
         frame, detections, contours, area = frame_que.get()
@@ -163,7 +162,7 @@ try:
     degrees_per_sec = 0 # 30 the higher the limit the more camera shake with big movements
     camera_delay = 0.05
     robot_mvmt_delay = 0.02 # delay for 0.02 seconds (20ms) to reduce the Raspberry Pi CPU load.
-    idle_delay = 5
+    idle_thread_delay = 4
     robot_mvmt_step = 4 
     detection_box = 0.1
     max_area_treshold = 300
@@ -171,16 +170,9 @@ try:
     visualize_detection = True
     show_performance_metric = True
 
-    # idle behaviour patterns
-    idle_up_right = 200*["r"]+20*["u"]
-    idle_down_left = 200*["l"]+20*["d"]
-    last_move_v = "up"
-    last_move_h = "right"
-    idle_array = idle_up_right
-    lock = threading.Lock()
-    q = Queue()
+    idle_q = Queue()
     stream_q = Queue()
-    idle_search_timer = threading.Timer(idle_delay, idle_search_func, args=(lock,q))
+    idle_search_timer = threading.Timer(idle_thread_delay, target=idle_search_func, args=(idle_q,))
     stream_thread = threading.Thread(target=video_stream_thread, args=(stream_q,))
     idle_search_timer.daemon = True
     stream_thread.daemon = True
@@ -190,8 +182,8 @@ try:
     BP.set_motor_limits(BP.PORT_C, power_limit, degrees_per_sec)
 
     if do_idle:
+        idle_q.put(0)
         idle_search_timer.start()
-        q.put(0)
     if visualize_detection:
         stream_thread.start()
     if show_performance_metric:
@@ -207,9 +199,7 @@ try:
         if visualize_detection: stream_q.put((image,detections,contours,area))
             
         if len(detections) > 0:
-            #print("Detected")
-
-            if do_idle: q.put(-1) # add detected flag to queue
+            if do_idle: idle_q.put(-1) # add detected flag to queue
             center_detection = detections[0]
             boxXCenter = (center_detection[0] + center_detection[2]) / 2
             boxYCenter = (center_detection[1]+ center_detection[3]) / 2
@@ -258,6 +248,3 @@ sys.exit(0)
 
 #status = BP.get_motor_status(BP.PORT_B)
 #print(status)
-# display the image on screen and wait for a keypress
-#cv2.imshow("Image", output)
-#cv2.waitKey(0)
