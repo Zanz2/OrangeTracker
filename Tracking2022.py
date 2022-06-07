@@ -184,7 +184,8 @@ try:
     stream_q = Queue()
     idle_search_timer = threading.Timer(idle_delay, idle_search_func, args=(lock,q))
     stream_thread = threading.Thread(target=video_stream_thread, args=(stream_q,))
-    #idle_search_timer.daemon = True
+    idle_search_timer.daemon = True
+    stream_thread.daemon = True
     
     BP.set_motor_limits(BP.PORT_A, power_limit, degrees_per_sec)
     BP.set_motor_limits(BP.PORT_B, power_limit, degrees_per_sec)
